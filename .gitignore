@@ -1,1 +1,6 @@
 tmp/*
+master_data/
+slave_data/
+.gocache/
+env/master_data/
+env/slave_data/
