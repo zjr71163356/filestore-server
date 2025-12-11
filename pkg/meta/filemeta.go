@@ -22,3 +22,7 @@ func GetFileMeta(filesha1 string) (FileMeta, bool) {
 	fmeta, exists := fileMetaMap[filesha1]
 	return fmeta, exists
 }
+
+func RemoveFileMeta(filesha1 string) {
+	delete(fileMetaMap, filesha1)
+}
