@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
+	"filestore-server/pkg/meta"
 	"io"
 	"net/http"
 	"os"
+	"time"
 )
 
 // 上传文件
@@ -27,17 +31,32 @@ func UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer file.Close()
-		dst, err := os.Create("./tmp/" + header.Filename)
+		location := "./tmp/" + header.Filename
+		dst, err := os.Create(location)
 		if err != nil {
 			http.Error(w, "Internal Server Error:"+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer dst.Close()
-		_, err = io.Copy(dst, file)
+
+		hash := sha1.New()
+		filesize, err := io.Copy(io.MultiWriter(dst, hash), file)
 		if err != nil {
 			http.Error(w, "Internal Server Error:"+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		fileSha1 := hex.EncodeToString(hash.Sum(nil))
+
+		fmeta := meta.FileMeta{
+			FileSha1: fileSha1,
+			FileName: header.Filename,
+			FileSize: filesize,
+			Location: location,
+			UploadAt: time.Now().Format("2006-01-02 15:04:05"),
+		}
+
+		meta.UpdateFileMeta(fmeta)
+
 		w.Write([]byte("Upload File Success!"))
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
