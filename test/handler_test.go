@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"filestore-server/handler"
 	"filestore-server/pkg/meta"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +42,9 @@ func TestUploadFileHandler_UpdateMeta(t *testing.T) {
 
 	content := []byte("test content for hashing")
 	h := sha1.New()
-	io.WriteString(h, string(content))
+	if _, err := h.Write(content); err != nil {
+		t.Fatalf("failed to write content hash: %v", err)
+	}
 	expectedSha1 := hex.EncodeToString(h.Sum(nil))
 	filename := "testfile.txt"
 
@@ -170,5 +171,100 @@ func TestDownloadFileHandler(t *testing.T) {
 	expectedDisposition := "attachment;filename=\"" + filename + "\""
 	if disposition := rr.Header().Get("Content-Disposition"); disposition != expectedDisposition {
 		t.Errorf("Content-Disposition mismatch: got %v want %v", disposition, expectedDisposition)
+	}
+}
+
+func TestFileMetaUpdateHandler(t *testing.T) {
+	// Setup
+	fileSha1 := "testsha1_update"
+	originalName := "original.txt"
+	newName := "renamed.txt"
+
+	fmeta := meta.FileMeta{
+		FileSha1: fileSha1,
+		FileName: originalName,
+		FileSize: 100,
+		Location: "/tmp/original.txt",
+	}
+	meta.UpdateFileMeta(fmeta)
+
+	// Request
+	// op=0 表示重命名操作
+	url := "/file/update?op=0&filehash=" + fileSha1 + "&filename=" + newName
+	req := httptest.NewRequest("POST", url, nil)
+	rr := httptest.NewRecorder()
+
+	// Execute
+	handler.FileMetaUpdateHandler(rr, req)
+
+	// Assert
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	var gotMeta meta.FileMeta
+	if err := json.Unmarshal(rr.Body.Bytes(), &gotMeta); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if gotMeta.FileName != newName {
+		t.Errorf("FileName mismatch: got %v want %v", gotMeta.FileName, newName)
+	}
+
+	// Verify internal state
+	storedMeta, ok := meta.GetFileMeta(fileSha1)
+	if !ok {
+		t.Fatalf("meta not found after update")
+	}
+	if storedMeta.FileName != newName {
+		t.Errorf("Stored FileName mismatch: got %v want %v", storedMeta.FileName, newName)
+	}
+}
+
+func TestFileDeleteHandler(t *testing.T) {
+	// Setup
+	tmpDir := "./tmp_delete"
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		t.Fatalf("failed to create tmp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	filename := "to_be_deleted.txt"
+	filePath := filepath.Join(tmpDir, filename)
+	if err := os.WriteFile(filePath, []byte("content"), 0644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	fileSha1 := "testsha1_delete"
+	fmeta := meta.FileMeta{
+		FileSha1: fileSha1,
+		FileName: filename,
+		FileSize: 7,
+		Location: filePath,
+	}
+	meta.UpdateFileMeta(fmeta)
+
+	// Request
+	req := httptest.NewRequest("POST", "/file/delete?filehash="+fileSha1, nil)
+	rr := httptest.NewRecorder()
+
+	// Execute
+	handler.FileDeleteHandler(rr, req)
+
+	// Assert
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	// Verify file is deleted
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Errorf("file was not deleted from disk")
+	}
+
+	// Verify meta is deleted
+	if _, ok := meta.GetFileMeta(fileSha1); ok {
+		t.Errorf("meta was not deleted from memory")
 	}
 }

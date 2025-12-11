@@ -10,32 +10,21 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
-	"time"
 )
 
 // 启动测试服务器
-func startTestServer() *http.Server {
+func startTestServer() *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/file/upload", handler.UploadFileHandler)
 	mux.HandleFunc("/file/meta", handler.GetFileMetaHandler)
 	mux.HandleFunc("/file/download", handler.DownloadFileHandler)
+	mux.HandleFunc("/file/update", handler.FileMetaUpdateHandler)
+	mux.HandleFunc("/file/delete", handler.FileDeleteHandler)
 
-	server := &http.Server{
-		Addr:    ":8081", // 使用不同于生产环境的端口
-		Handler: mux,
-	}
-
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			panic(err)
-		}
-	}()
-
-	// 简单等待服务器启动
-	time.Sleep(100 * time.Millisecond)
-	return server
+	return httptest.NewServer(mux)
 }
 
 func TestE2E_UploadDownload(t *testing.T) {
@@ -50,15 +39,18 @@ func TestE2E_UploadDownload(t *testing.T) {
 	server := startTestServer()
 	defer server.Close()
 
-	baseURL := "http://localhost:8081"
-	client := &http.Client{}
+	baseURL := server.URL
+	client := server.Client()
 
 	// 2. 准备测试数据
 	content := []byte("E2E test content for full flow verification")
 	h := sha1.New()
-	io.WriteString(h, string(content))
+	if _, err := h.Write(content); err != nil {
+		t.Fatalf("failed to hash content: %v", err)
+	}
 	expectedSha1 := hex.EncodeToString(h.Sum(nil))
 	filename := "e2e_test.txt"
+	newFilename := "e2e_test_renamed.txt"
 
 	// 3. Step 1: 上传文件
 	t.Log("Step 1: Uploading file...")
@@ -106,9 +98,34 @@ func TestE2E_UploadDownload(t *testing.T) {
 	if metaData.FileSha1 != expectedSha1 {
 		t.Errorf("meta sha1 mismatch: got %s want %s", metaData.FileSha1, expectedSha1)
 	}
+	if metaData.FileName != filename {
+		t.Errorf("meta filename mismatch: got %s want %s", metaData.FileName, filename)
+	}
 
-	// 5. Step 3: 下载文件
-	t.Log("Step 3: Downloading file...")
+	// 5. Step 3: 更新文件元信息（重命名）
+	t.Log("Step 3: Renaming file meta...")
+	req, _ = http.NewRequest("POST", baseURL+"/file/update?op=0&filehash="+expectedSha1+"&filename="+newFilename, nil)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("update meta request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("update meta failed status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var updatedMeta meta.FileMeta
+	if err := json.NewDecoder(resp.Body).Decode(&updatedMeta); err != nil {
+		t.Fatalf("decode updated meta failed: %v", err)
+	}
+	if updatedMeta.FileName != newFilename {
+		t.Errorf("updated meta filename mismatch: got %s want %s", updatedMeta.FileName, newFilename)
+	}
+
+	// 6. Step 4: 下载文件
+	t.Log("Step 4: Downloading file...")
 	req, _ = http.NewRequest("POST", baseURL+"/file/download?filehash="+expectedSha1, nil)
 	resp, err = client.Do(req)
 	if err != nil {
@@ -127,6 +144,37 @@ func TestE2E_UploadDownload(t *testing.T) {
 
 	if string(downloadedContent) != string(content) {
 		t.Errorf("downloaded content mismatch")
+	}
+	if disposition := resp.Header.Get("Content-Disposition"); disposition != "attachment;filename=\""+newFilename+"\"" {
+		t.Errorf("download disposition mismatch: got %s want %s", disposition, "attachment;filename=\""+newFilename+"\"")
+	}
+
+	// 7. Step 5: 删除文件
+	t.Log("Step 5: Deleting file...")
+	req, _ = http.NewRequest("POST", baseURL+"/file/delete?filehash="+expectedSha1, nil)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("delete request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete failed status: %d, body: %s", resp.StatusCode, string(body))
+	}
+	if _, err := os.Stat("./tmp/" + filename); !os.IsNotExist(err) {
+		t.Errorf("file was not removed from disk")
+	}
+
+	// 再次查询元信息，确认已删除
+	req, _ = http.NewRequest("POST", baseURL+"/file/meta?filehash="+expectedSha1, nil)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("get meta after delete request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Errorf("expected meta query to fail after delete, got status %d", resp.StatusCode)
 	}
 
 	t.Log("E2E Test Passed!")
