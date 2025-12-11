@@ -33,6 +33,13 @@ func UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer file.Close()
+
+		// 确保 tmp 目录存在
+		if err := os.MkdirAll("./tmp", 0755); err != nil {
+			http.Error(w, "Internal Server Error: failed to create tmp dir", http.StatusInternalServerError)
+			return
+		}
+
 		location := "./tmp/" + header.Filename
 		dst, err := os.Create(location)
 		if err != nil {
@@ -71,8 +78,8 @@ func UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// 通过文件元信息的其中一个字段fsha1(fileMetaMap Map 中的key)
 // 获取整个文件元信息fileMeta
+// 通过filehash，即文件元信息的其中一个字段fsha1(fileMetaMap Map 中的key)
 func GetFileMetaHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 
@@ -95,8 +102,11 @@ func GetFileMetaHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Write(data)
+
 }
 
+// 下载文件
+// 通过filehash，即文件元信息的其中一个字段fsha1(fileMetaMap Map 中的key)
 func DownloadFileHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 
@@ -126,4 +136,48 @@ func DownloadFileHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment;filename=\""+fmeta.FileName+"\"")
 	w.Write(data)
 
+}
+
+// FileMetaUpdateHandler 更新元信息接口(重命名)
+func FileMetaUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+
+	filesha1 := r.Form.Get("filehash")
+	newFileName := r.Form.Get("filename")
+	opType := r.Form.Get("op")
+	if opType != "0" {
+		http.Error(w, "Forbidden: invalid operation type", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "Forbidden: Method Error", http.StatusForbidden)
+		return
+	}
+	curFileMeta, ok := meta.GetFileMeta(filesha1)
+	if !ok {
+		http.Error(w, "Get FileMeta Failed: meta not found", http.StatusInternalServerError)
+		return
+	}
+	curFileMeta.FileName = newFileName
+	meta.UpdateFileMeta(curFileMeta)
+
+	data, err := json.Marshal(curFileMeta)
+	if err != nil {
+		http.Error(w, "Internal Server Error: failed to marshal file meta", http.StatusInternalServerError)
+		return
+	}
+	w.Write(data)
+}
+
+// FileDeleteHandler : 删除文件元信息
+func FileDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	filesha1 := r.Form.Get("filehash")
+	fmeta, ok := meta.GetFileMeta(filesha1)
+	if !ok {
+		http.Error(w, "Get FileMeta Failed: meta not found", http.StatusInternalServerError)
+	}
+	os.Remove(fmeta.Location)
+	meta.RemoveFileMeta(filesha1)
+	w.WriteHeader(http.StatusOK)
 }
