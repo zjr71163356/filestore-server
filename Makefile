@@ -1,3 +1,3 @@
-test:
-	go test ./... -v 
-.PHONY: test
+test-coverage:
+	go test -coverpkg=./... -coverprofile=coverage.out ./...
+.PHONY: test-coverage
