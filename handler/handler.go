@@ -19,7 +19,7 @@ func UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		file, err := os.ReadFile("./static/view/index.html")
 		if err != nil {
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			http.Error(w, "Internal Server Error: failed to read index.html", http.StatusInternalServerError)
 			return
 		}
 		w.Write(file)
@@ -29,14 +29,14 @@ func UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 
 		file, header, err := r.FormFile("file")
 		if err != nil {
-			http.Error(w, "Bad Request", http.StatusBadRequest)
+			http.Error(w, "Bad Request: failed to get file from form", http.StatusBadRequest)
 			return
 		}
 		defer file.Close()
 		location := "./tmp/" + header.Filename
 		dst, err := os.Create(location)
 		if err != nil {
-			http.Error(w, "Internal Server Error:"+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Internal Server Error: failed to create file "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer dst.Close()
@@ -44,7 +44,7 @@ func UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 		hash := sha1.New()
 		filesize, err := io.Copy(io.MultiWriter(dst, hash), file)
 		if err != nil {
-			http.Error(w, "Internal Server Error:"+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Internal Server Error: failed to save file "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		fileSha1 := hex.EncodeToString(hash.Sum(nil))
@@ -59,13 +59,20 @@ func UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 
 		meta.UpdateFileMeta(fmeta)
 
-		w.Write([]byte("Upload File Success!"))
+		data, err := json.Marshal(fmeta)
+		if err != nil {
+			http.Error(w, "Internal Server Error: failed to marshal file meta "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte("Upload File Success! " + string(data)))
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 
 	}
 }
 
+// 通过文件元信息的其中一个字段fsha1(fileMetaMap Map 中的key)
+// 获取整个文件元信息fileMeta
 func GetFileMetaHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 
@@ -78,13 +85,13 @@ func GetFileMetaHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmeta, ok := meta.GetFileMeta(fileSha1)
 	if !ok {
-		http.Error(w, "Get FileMeta Failed", http.StatusInternalServerError)
+		http.Error(w, "Get FileMeta Failed: meta not found", http.StatusInternalServerError)
 		return
 	}
 
 	data, err := json.Marshal(fmeta)
 	if err != nil {
-		http.Error(w, "Json marshal error  ", http.StatusInternalServerError)
+		http.Error(w, "Internal Server Error: failed to marshal file meta", http.StatusInternalServerError)
 		return
 	}
 	w.Write(data)
@@ -97,7 +104,7 @@ func DownloadFileHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmeta, ok := meta.GetFileMeta(filesha1)
 	if !ok {
-		http.Error(w, "Get FileMeta Failed", http.StatusInternalServerError)
+		http.Error(w, "Get FileMeta Failed: meta not found", http.StatusInternalServerError)
 		return
 	}
 
@@ -105,14 +112,14 @@ func DownloadFileHandler(w http.ResponseWriter, r *http.Request) {
 	// file表示打开的文件对应的句柄
 	file, err := os.Open(fmeta.Location)
 	if err != nil {
-		http.Error(w, "Get FileMeta Failed", http.StatusInternalServerError)
+		http.Error(w, "Get FileMeta Failed: failed to open file", http.StatusInternalServerError)
 		return
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		http.Error(w, "Read File Failed", http.StatusInternalServerError)
+		http.Error(w, "Read File Failed: failed to read file content", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
