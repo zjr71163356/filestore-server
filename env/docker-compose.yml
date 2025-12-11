@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  # 主库 (Master)
+  master:
+    image: mysql:8.0
+    container_name: mysql-master
+    environment:
+      MYSQL_ROOT_PASSWORD: master_root_password
+      MYSQL_DATABASE: mydb
+      MYSQL_USER: repl_user
+      MYSQL_PASSWORD: repl_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./master_data:/var/lib/mysql
+      - ./master.cnf:/etc/mysql/conf.d/master.cnf
+      - ./master-init.sql:/docker-entrypoint-initdb.d/master-init.sql
+    networks:
+      - mysql_network
+
+  # 从库 (Slave)
+  slave:
+    image: mysql:8.0
+    container_name: mysql-slave
+    depends_on:
+      - master
+    environment:
+      MYSQL_ROOT_PASSWORD: slave_root_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - ./slave_data:/var/lib/mysql
+      - ./slave.cnf:/etc/mysql/conf.d/slave.cnf
+    networks:
+      - mysql_network
+
+networks:
+  mysql_network:
+    driver: bridge
