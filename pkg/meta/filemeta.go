@@ -18,6 +18,7 @@ func UpdateFileMeta(fmeta FileMeta) {
 	fileMetaMap[fmeta.FileSha1] = fmeta
 }
 
-func GetFileMeta(filesha1 string) FileMeta {
-	return fileMetaMap[filesha1]
+func GetFileMeta(filesha1 string) (FileMeta, bool) {
+	fmeta, exists := fileMetaMap[filesha1]
+	return fmeta, exists
 }
