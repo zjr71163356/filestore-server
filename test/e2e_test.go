@@ -2,11 +2,12 @@ package handler_test
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"filestore-server/handler"
-	"filestore-server/pkg/meta"
+	"filestore-server/pkg/dao"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -43,7 +44,10 @@ func TestE2E_UploadDownload(t *testing.T) {
 	client := server.Client()
 
 	// 2. 准备测试数据
-	content := []byte("E2E test content for full flow verification")
+	content := make([]byte, 64)
+	if _, err := rand.Read(content); err != nil {
+		t.Fatalf("failed to generate random content: %v", err)
+	}
 	h := sha1.New()
 	if _, err := h.Write(content); err != nil {
 		t.Fatalf("failed to hash content: %v", err)
@@ -90,7 +94,7 @@ func TestE2E_UploadDownload(t *testing.T) {
 		t.Fatalf("get meta failed status: %d", resp.StatusCode)
 	}
 
-	var metaData meta.FileMeta
+	var metaData dao.FileMeta
 	if err := json.NewDecoder(resp.Body).Decode(&metaData); err != nil {
 		t.Fatalf("decode meta failed: %v", err)
 	}
@@ -116,7 +120,7 @@ func TestE2E_UploadDownload(t *testing.T) {
 		t.Fatalf("update meta failed status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	var updatedMeta meta.FileMeta
+	var updatedMeta dao.FileMeta
 	if err := json.NewDecoder(resp.Body).Decode(&updatedMeta); err != nil {
 		t.Fatalf("decode updated meta failed: %v", err)
 	}

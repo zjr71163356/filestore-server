@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"filestore-server/handler"
+	"filestore-server/pkg/dao"
 	"filestore-server/pkg/meta"
 	"mime/multipart"
 	"net/http"
@@ -86,7 +87,7 @@ func TestUploadFileHandler_UpdateMeta(t *testing.T) {
 func TestGetFileMetaHandler(t *testing.T) {
 	// Setup
 	fileSha1 := "testsha1_get"
-	expectedMeta := meta.FileMeta{
+	expectedMeta := dao.FileMeta{
 		FileSha1: fileSha1,
 		FileName: "test_get.txt",
 		FileSize: 123,
@@ -109,7 +110,7 @@ func TestGetFileMetaHandler(t *testing.T) {
 			status, http.StatusOK)
 	}
 
-	var gotMeta meta.FileMeta
+	var gotMeta dao.FileMeta
 	if err := json.Unmarshal(rr.Body.Bytes(), &gotMeta); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestDownloadFileHandler(t *testing.T) {
 	}
 
 	fileSha1 := "downloadsha1"
-	fmeta := meta.FileMeta{
+	fmeta := dao.FileMeta{
 		FileSha1: fileSha1,
 		FileName: filename,
 		FileSize: int64(len(content)),
@@ -180,7 +181,7 @@ func TestFileMetaUpdateHandler(t *testing.T) {
 	originalName := "original.txt"
 	newName := "renamed.txt"
 
-	fmeta := meta.FileMeta{
+	fmeta := dao.FileMeta{
 		FileSha1: fileSha1,
 		FileName: originalName,
 		FileSize: 100,
@@ -203,7 +204,7 @@ func TestFileMetaUpdateHandler(t *testing.T) {
 			status, http.StatusOK)
 	}
 
-	var gotMeta meta.FileMeta
+	var gotMeta dao.FileMeta
 	if err := json.Unmarshal(rr.Body.Bytes(), &gotMeta); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
@@ -237,7 +238,7 @@ func TestFileDeleteHandler(t *testing.T) {
 	}
 
 	fileSha1 := "testsha1_delete"
-	fmeta := meta.FileMeta{
+	fmeta := dao.FileMeta{
 		FileSha1: fileSha1,
 		FileName: filename,
 		FileSize: 7,

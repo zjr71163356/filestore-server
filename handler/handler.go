@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"filestore-server/pkg/dao"
 	"filestore-server/pkg/meta"
 	"io"
 	"net/http"
@@ -56,7 +57,7 @@ func UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		fileSha1 := hex.EncodeToString(hash.Sum(nil))
 
-		fmeta := meta.FileMeta{
+		fmeta := dao.FileMeta{
 			FileSha1: fileSha1,
 			FileName: header.Filename,
 			FileSize: filesize,
@@ -64,7 +65,7 @@ func UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 			UploadAt: time.Now().Format("2006-01-02 15:04:05"),
 		}
 
-		meta.UpdateFileMeta(fmeta)
+		meta.InsertFileMeta(fmeta)
 
 		data, err := json.Marshal(fmeta)
 		if err != nil {
