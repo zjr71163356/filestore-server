@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"filestore-server/pkg/dao"
-	"filestore-server/pkg/meta"
+	"filestore-server/service"
 	"io"
 	"net/http"
 	"os"
@@ -65,7 +65,10 @@ func UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 			UploadAt: time.Now().Format("2006-01-02 15:04:05"),
 		}
 
-		meta.InsertFileMeta(fmeta)
+		if err := service.SaveFileMeta(r.Context(), fmeta); err != nil {
+			http.Error(w, "Internal Server Error: failed to persist file meta", http.StatusInternalServerError)
+			return
+		}
 
 		data, err := json.Marshal(fmeta)
 		if err != nil {
@@ -91,8 +94,8 @@ func GetFileMetaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	fileSha1 := filehash[0]
 
-	fmeta, ok := meta.GetFileMeta(fileSha1)
-	if !ok {
+	fmeta, err := service.GetFileMeta(r.Context(), fileSha1)
+	if err != nil {
 		http.Error(w, "Get FileMeta Failed: meta not found", http.StatusInternalServerError)
 		return
 	}
@@ -113,8 +116,8 @@ func DownloadFileHandler(w http.ResponseWriter, r *http.Request) {
 
 	filesha1 := r.Form.Get("filehash")
 
-	fmeta, ok := meta.GetFileMeta(filesha1)
-	if !ok {
+	fmeta, err := service.GetFileMeta(r.Context(), filesha1)
+	if err != nil {
 		http.Error(w, "Get FileMeta Failed: meta not found", http.StatusInternalServerError)
 		return
 	}
@@ -154,13 +157,16 @@ func FileMetaUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Forbidden: Method Error", http.StatusForbidden)
 		return
 	}
-	curFileMeta, ok := meta.GetFileMeta(filesha1)
-	if !ok {
+	curFileMeta, err := service.GetFileMeta(r.Context(), filesha1)
+	if err != nil {
 		http.Error(w, "Get FileMeta Failed: meta not found", http.StatusInternalServerError)
 		return
 	}
 	curFileMeta.FileName = newFileName
-	meta.UpdateFileMeta(curFileMeta)
+	if err := service.UpdateFileMeta(r.Context(), curFileMeta); err != nil {
+		http.Error(w, "Internal Server Error: failed to update file meta", http.StatusInternalServerError)
+		return
+	}
 
 	data, err := json.Marshal(curFileMeta)
 	if err != nil {
@@ -174,11 +180,12 @@ func FileMetaUpdateHandler(w http.ResponseWriter, r *http.Request) {
 func FileDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	filesha1 := r.Form.Get("filehash")
-	fmeta, ok := meta.GetFileMeta(filesha1)
-	if !ok {
+	fmeta, err := service.GetFileMeta(r.Context(), filesha1)
+	if err != nil {
 		http.Error(w, "Get FileMeta Failed: meta not found", http.StatusInternalServerError)
+		return
 	}
 	os.Remove(fmeta.Location)
-	meta.RemoveFileMeta(filesha1)
+	service.DeleteFileMeta(r.Context(), filesha1)
 	w.WriteHeader(http.StatusOK)
 }

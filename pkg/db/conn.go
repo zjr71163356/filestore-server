@@ -3,7 +3,6 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"os"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -25,7 +24,8 @@ func init() {
 	err = conn.Ping()
 	if err != nil {
 		fmt.Println("Failed to connect to mysql, err:" + err.Error())
-		os.Exit(1)
+		conn = nil
+		return
 	}
 
 }

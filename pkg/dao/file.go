@@ -87,3 +87,27 @@ func UpdateFileMeta(ctx context.Context, fmeta FileMeta) error {
 
 	return nil
 }
+
+// DeleteFileMeta 软删除（将 status 置为 0）
+func DeleteFileMeta(ctx context.Context, filehash string) error {
+	const sqlStr = "update tbl_file set status=0 where file_sha1=?"
+
+	conn := db.DBconn()
+	if conn == nil {
+		return fmt.Errorf("db connection is nil")
+	}
+
+	result, err := conn.ExecContext(ctx, sqlStr, filehash)
+	if err != nil {
+		return fmt.Errorf("failed to delete file meta: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get affected rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("file %s not found", filehash)
+	}
+	return nil
+}

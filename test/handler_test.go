@@ -2,12 +2,15 @@ package handler_test
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"filestore-server/handler"
 	"filestore-server/pkg/dao"
-	"filestore-server/pkg/meta"
+	"filestore-server/pkg/db"
+	"filestore-server/service"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -33,7 +36,25 @@ func createUploadRequest(fieldName, filename string, content []byte) (*http.Requ
 	return req, nil
 }
 
+func requireDB(t *testing.T) {
+	t.Helper()
+	if db.DBconn() == nil {
+		t.Error("db not available")
+	}
+	
+}
+
+func randHex(nBytes int) string {
+	b := make([]byte, nBytes)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
+
 func TestUploadFileHandler_UpdateMeta(t *testing.T) {
+	requireDB(t)
+
 	// 准备临时目录
 	tmpDir := "./tmp"
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
@@ -41,13 +62,13 @@ func TestUploadFileHandler_UpdateMeta(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	content := []byte("test content for hashing")
+	content := []byte(randHex(16))
 	h := sha1.New()
 	if _, err := h.Write(content); err != nil {
 		t.Fatalf("failed to write content hash: %v", err)
 	}
 	expectedSha1 := hex.EncodeToString(h.Sum(nil))
-	filename := "testfile.txt"
+	filename := "upload_" + randHex(4) + ".txt"
 
 	req, err := createUploadRequest("file", filename, content)
 	if err != nil {
@@ -64,8 +85,8 @@ func TestUploadFileHandler_UpdateMeta(t *testing.T) {
 	}
 
 	// 检查 meta 中是否存在对应条目（GetFileMeta 返回零值时表示未找到）
-	gotMeta, ok := meta.GetFileMeta(expectedSha1)
-	if !ok {
+	gotMeta, err := service.GetFileMeta(context.Background(), expectedSha1)
+	if err != nil {
 		t.Fatalf("meta not found for sha1 %s", expectedSha1)
 	}
 	if gotMeta.FileSha1 == "" {
@@ -85,16 +106,20 @@ func TestUploadFileHandler_UpdateMeta(t *testing.T) {
 }
 
 func TestGetFileMetaHandler(t *testing.T) {
+	requireDB(t)
+
 	// Setup
-	fileSha1 := "testsha1_get"
+	fileSha1 := randHex(20)
 	expectedMeta := dao.FileMeta{
 		FileSha1: fileSha1,
-		FileName: "test_get.txt",
-		FileSize: 123,
-		Location: "/tmp/test_get.txt",
+		FileName: "meta_" + randHex(4) + ".txt",
+		FileSize: int64(len(fileSha1)),
+		Location: "/tmp/" + randHex(6),
 		UploadAt: "2023-01-01 10:00:00",
 	}
-	meta.UpdateFileMeta(expectedMeta)
+	if err := service.SaveFileMeta(context.Background(), expectedMeta); err != nil {
+		t.Fatalf("failed to seed meta: %v", err)
+	}
 
 	// Request
 	// 注意：GetFileMetaHandler 使用 r.ParseForm() 解析参数，支持 URL query 参数
@@ -124,6 +149,8 @@ func TestGetFileMetaHandler(t *testing.T) {
 }
 
 func TestDownloadFileHandler(t *testing.T) {
+	requireDB(t)
+
 	// Setup
 	tmpDir := "./tmp_download"
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
@@ -131,21 +158,23 @@ func TestDownloadFileHandler(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	content := []byte("download test content")
-	filename := "download_test.txt"
+	content := []byte(randHex(24))
+	filename := "download_" + randHex(4) + ".txt"
 	filePath := filepath.Join(tmpDir, filename)
 	if err := os.WriteFile(filePath, content, 0644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	fileSha1 := "downloadsha1"
+	fileSha1 := randHex(20)
 	fmeta := dao.FileMeta{
 		FileSha1: fileSha1,
 		FileName: filename,
 		FileSize: int64(len(content)),
 		Location: filePath,
 	}
-	meta.UpdateFileMeta(fmeta)
+	if err := service.SaveFileMeta(context.Background(), fmeta); err != nil {
+		t.Fatalf("failed to seed meta: %v", err)
+	}
 
 	// Request
 	req := httptest.NewRequest("POST", "/file/download?filehash="+fileSha1, nil)
@@ -176,18 +205,22 @@ func TestDownloadFileHandler(t *testing.T) {
 }
 
 func TestFileMetaUpdateHandler(t *testing.T) {
+	requireDB(t)
+
 	// Setup
-	fileSha1 := "testsha1_update"
-	originalName := "original.txt"
-	newName := "renamed.txt"
+	fileSha1 := randHex(20)
+	originalName := "orig_" + randHex(4) + ".txt"
+	newName := "renamed_" + randHex(4) + ".txt"
 
 	fmeta := dao.FileMeta{
 		FileSha1: fileSha1,
 		FileName: originalName,
 		FileSize: 100,
-		Location: "/tmp/original.txt",
+		Location: "/tmp/" + randHex(6),
 	}
-	meta.UpdateFileMeta(fmeta)
+	if err := service.SaveFileMeta(context.Background(), fmeta); err != nil {
+		t.Fatalf("failed to seed meta: %v", err)
+	}
 
 	// Request
 	// op=0 表示重命名操作
@@ -214,8 +247,8 @@ func TestFileMetaUpdateHandler(t *testing.T) {
 	}
 
 	// Verify internal state
-	storedMeta, ok := meta.GetFileMeta(fileSha1)
-	if !ok {
+	storedMeta, err := service.GetFileMeta(context.Background(), fileSha1)
+	if err != nil {
 		t.Fatalf("meta not found after update")
 	}
 	if storedMeta.FileName != newName {
@@ -224,6 +257,8 @@ func TestFileMetaUpdateHandler(t *testing.T) {
 }
 
 func TestFileDeleteHandler(t *testing.T) {
+	requireDB(t)
+
 	// Setup
 	tmpDir := "./tmp_delete"
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
@@ -231,20 +266,23 @@ func TestFileDeleteHandler(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	filename := "to_be_deleted.txt"
+	content := []byte("content_" + randHex(6))
+	filename := "delete_" + randHex(4) + ".txt"
 	filePath := filepath.Join(tmpDir, filename)
-	if err := os.WriteFile(filePath, []byte("content"), 0644); err != nil {
+	if err := os.WriteFile(filePath, content, 0644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	fileSha1 := "testsha1_delete"
+	fileSha1 := randHex(20)
 	fmeta := dao.FileMeta{
 		FileSha1: fileSha1,
 		FileName: filename,
-		FileSize: 7,
+		FileSize: int64(len(content)),
 		Location: filePath,
 	}
-	meta.UpdateFileMeta(fmeta)
+	if err := service.SaveFileMeta(context.Background(), fmeta); err != nil {
+		t.Fatalf("failed to seed meta: %v", err)
+	}
 
 	// Request
 	req := httptest.NewRequest("POST", "/file/delete?filehash="+fileSha1, nil)
@@ -265,7 +303,7 @@ func TestFileDeleteHandler(t *testing.T) {
 	}
 
 	// Verify meta is deleted
-	if _, ok := meta.GetFileMeta(fileSha1); ok {
+	if _, err := service.GetFileMeta(context.Background(), fileSha1); err == nil {
 		t.Errorf("meta was not deleted from memory")
 	}
 }

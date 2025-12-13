@@ -29,6 +29,8 @@ func startTestServer() *httptest.Server {
 }
 
 func TestE2E_UploadDownload(t *testing.T) {
+	requireDB(t)
+
 	// 1. 准备环境
 	tmpDir := "./tmp"
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
@@ -53,8 +55,8 @@ func TestE2E_UploadDownload(t *testing.T) {
 		t.Fatalf("failed to hash content: %v", err)
 	}
 	expectedSha1 := hex.EncodeToString(h.Sum(nil))
-	filename := "e2e_test.txt"
-	newFilename := "e2e_test_renamed.txt"
+	filename := "e2e_" + randHex(4) + ".txt"
+	newFilename := "e2e_renamed_" + randHex(4) + ".txt"
 
 	// 3. Step 1: 上传文件
 	t.Log("Step 1: Uploading file...")
