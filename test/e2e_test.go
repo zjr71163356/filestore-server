@@ -6,26 +6,64 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"filestore-server/handler"
 	"filestore-server/pkg/dao"
+	"filestore-server/pkg/router"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
 // 启动测试服务器
 func startTestServer() *httptest.Server {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/file/upload", handler.UploadFileHandler)
-	mux.HandleFunc("/file/meta", handler.GetFileMetaHandler)
-	mux.HandleFunc("/file/download", handler.DownloadFileHandler)
-	mux.HandleFunc("/file/update", handler.FileMetaUpdateHandler)
-	mux.HandleFunc("/file/delete", handler.FileDeleteHandler)
+	gin.SetMode(gin.TestMode)
+	r := router.New()
+	return httptest.NewServer(r)
+}
 
-	return httptest.NewServer(mux)
+func signupAndLoginClient(t *testing.T, baseURL string, client *http.Client) *http.Cookie {
+	t.Helper()
+	username := "user_" + randHex(6)
+	password := "pass_" + randHex(6)
+	form := url.Values{
+		"username": {username},
+		"password": {password},
+	}
+
+	signupReq, _ := http.NewRequest("POST", baseURL+"/user/signup", strings.NewReader(form.Encode()))
+	signupReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signupResp, err := client.Do(signupReq)
+	if err != nil {
+		t.Fatalf("signup request failed: %v", err)
+	}
+	signupResp.Body.Close()
+	if signupResp.StatusCode != http.StatusOK && signupResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("signup failed status: %d", signupResp.StatusCode)
+	}
+
+	loginReq, _ := http.NewRequest("POST", baseURL+"/user/login", strings.NewReader(form.Encode()))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginResp, err := client.Do(loginReq)
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(loginResp.Body)
+		t.Fatalf("login failed status: %d body:%s", loginResp.StatusCode, string(body))
+	}
+
+	cookies := loginResp.Cookies()
+	if len(cookies) == 0 {
+		t.Fatalf("no session cookie returned")
+	}
+	return cookies[0]
 }
 
 func TestE2E_UploadDownload(t *testing.T) {
@@ -44,6 +82,7 @@ func TestE2E_UploadDownload(t *testing.T) {
 
 	baseURL := server.URL
 	client := server.Client()
+	sessionCookie := signupAndLoginClient(t, baseURL, client)
 
 	// 2. 准备测试数据
 	content := make([]byte, 64)
@@ -71,6 +110,7 @@ func TestE2E_UploadDownload(t *testing.T) {
 
 	req, _ := http.NewRequest("POST", baseURL+"/file/upload", &b)
 	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(sessionCookie)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -85,7 +125,8 @@ func TestE2E_UploadDownload(t *testing.T) {
 
 	// 4. Step 2: 查询元信息
 	t.Log("Step 2: Checking file meta...")
-	req, _ = http.NewRequest("POST", baseURL+"/file/meta?filehash="+expectedSha1, nil)
+	req, _ = http.NewRequest("GET", baseURL+"/file/meta?filehash="+expectedSha1, nil)
+	req.AddCookie(sessionCookie)
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("get meta request failed: %v", err)
@@ -111,6 +152,7 @@ func TestE2E_UploadDownload(t *testing.T) {
 	// 5. Step 3: 更新文件元信息（重命名）
 	t.Log("Step 3: Renaming file meta...")
 	req, _ = http.NewRequest("POST", baseURL+"/file/update?op=0&filehash="+expectedSha1+"&filename="+newFilename, nil)
+	req.AddCookie(sessionCookie)
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("update meta request failed: %v", err)
@@ -132,7 +174,8 @@ func TestE2E_UploadDownload(t *testing.T) {
 
 	// 6. Step 4: 下载文件
 	t.Log("Step 4: Downloading file...")
-	req, _ = http.NewRequest("POST", baseURL+"/file/download?filehash="+expectedSha1, nil)
+	req, _ = http.NewRequest("GET", baseURL+"/file/download?filehash="+expectedSha1, nil)
+	req.AddCookie(sessionCookie)
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("download request failed: %v", err)
@@ -158,6 +201,7 @@ func TestE2E_UploadDownload(t *testing.T) {
 	// 7. Step 5: 删除文件
 	t.Log("Step 5: Deleting file...")
 	req, _ = http.NewRequest("POST", baseURL+"/file/delete?filehash="+expectedSha1, nil)
+	req.AddCookie(sessionCookie)
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("delete request failed: %v", err)
@@ -173,7 +217,8 @@ func TestE2E_UploadDownload(t *testing.T) {
 	}
 
 	// 再次查询元信息，确认已删除
-	req, _ = http.NewRequest("POST", baseURL+"/file/meta?filehash="+expectedSha1, nil)
+	req, _ = http.NewRequest("GET", baseURL+"/file/meta?filehash="+expectedSha1, nil)
+	req.AddCookie(sessionCookie)
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("get meta after delete request failed: %v", err)

@@ -7,16 +7,54 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"filestore-server/handler"
 	"filestore-server/pkg/dao"
 	"filestore-server/pkg/db"
+	"filestore-server/pkg/router"
 	"filestore-server/service"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+)
+
+const (
+	userTableDDL = `
+CREATE TABLE IF NOT EXISTS tbl_user (
+  id int(11) NOT NULL AUTO_INCREMENT,
+  user_name varchar(64) NOT NULL DEFAULT '' COMMENT '用户名',
+  user_pwd varchar(256) NOT NULL DEFAULT '' COMMENT '用户encoded密码',
+  email varchar(64) DEFAULT '' COMMENT '邮箱',
+  phone varchar(128) DEFAULT '' COMMENT '手机号',
+  email_validated tinyint(1) DEFAULT 0 COMMENT '邮箱是否已验证',
+  phone_validated tinyint(1) DEFAULT 0 COMMENT '手机号是否已验证',
+  signup_at datetime DEFAULT CURRENT_TIMESTAMP COMMENT '注册日期',
+  last_active datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后活跃时间戳',
+  profile text COMMENT '用户属性',
+  status int(11) NOT NULL DEFAULT '0' COMMENT '账户状态(启用/禁用/锁定/标记删除等)',
+  PRIMARY KEY (id),
+  UNIQUE KEY idx_username (user_name),
+  KEY idx_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+
+	fileTableDDL = `
+CREATE TABLE IF NOT EXISTS tbl_file (
+  id int(11) NOT NULL AUTO_INCREMENT,
+  file_sha1 char(40) NOT NULL,
+  file_name varchar(256) NOT NULL,
+  file_size bigint DEFAULT 0,
+  file_addr varchar(1024) NOT NULL,
+  status int NOT NULL DEFAULT 1,
+  upload_at datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY idx_file_sha1 (file_sha1),
+  KEY idx_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
 )
 
 // createUploadRequest 构造 multipart/form-data 的上传请求
@@ -41,7 +79,7 @@ func requireDB(t *testing.T) {
 	if db.DBconn() == nil {
 		t.Error("db not available")
 	}
-	
+	ensureTestTables(t)
 }
 
 func randHex(nBytes int) string {
@@ -52,8 +90,65 @@ func randHex(nBytes int) string {
 	return hex.EncodeToString(b)
 }
 
+func newTestRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	return router.New()
+}
+
+// ensureTestTables creates tables for tests if they do not exist.
+func ensureTestTables(t *testing.T) {
+	t.Helper()
+	conn := db.DBconn()
+	if conn == nil {
+		t.Fatalf("db connection is nil")
+	}
+	ctx := context.Background()
+	if _, err := conn.ExecContext(ctx, userTableDDL); err != nil {
+		t.Fatalf("failed to ensure tbl_user: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, fileTableDDL); err != nil {
+		t.Fatalf("failed to ensure tbl_file: %v", err)
+	}
+}
+
+func signupAndLogin(t *testing.T, r *gin.Engine) *http.Cookie {
+	t.Helper()
+	username := "user_" + randHex(6)
+	password := "pass_" + randHex(6)
+
+	form := url.Values{
+		"username": {username},
+		"password": {password},
+	}
+
+	signupReq := httptest.NewRequest("POST", "/user/signup", strings.NewReader(form.Encode()))
+	signupReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signupRes := httptest.NewRecorder()
+	r.ServeHTTP(signupRes, signupReq)
+	if signupRes.Code != http.StatusOK && signupRes.Code != http.StatusBadRequest {
+		t.Fatalf("signup failed: status %d body %s", signupRes.Code, signupRes.Body.String())
+	}
+
+	loginReq := httptest.NewRequest("POST", "/user/login", strings.NewReader(form.Encode()))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRes := httptest.NewRecorder()
+	r.ServeHTTP(loginRes, loginReq)
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("login failed: status %d body %s", loginRes.Code, loginRes.Body.String())
+	}
+	resp := loginRes.Result()
+	cookies := resp.Cookies()
+	if len(cookies) == 0 {
+		t.Fatalf("no session cookie returned")
+	}
+	return cookies[0]
+}
+
 func TestUploadFileHandler_UpdateMeta(t *testing.T) {
 	requireDB(t)
+
+	r := newTestRouter()
+	sessionCookie := signupAndLogin(t, r)
 
 	// 准备临时目录
 	tmpDir := "./tmp"
@@ -74,10 +169,11 @@ func TestUploadFileHandler_UpdateMeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create request failed: %v", err)
 	}
+	req.AddCookie(sessionCookie)
 
 	// 执行 handler
 	rr := httptest.NewRecorder()
-	handler.UploadFileHandler(rr, req)
+	r.ServeHTTP(rr, req)
 
 	res := rr.Result()
 	if res.StatusCode != http.StatusOK {
@@ -108,6 +204,9 @@ func TestUploadFileHandler_UpdateMeta(t *testing.T) {
 func TestGetFileMetaHandler(t *testing.T) {
 	requireDB(t)
 
+	r := newTestRouter()
+	sessionCookie := signupAndLogin(t, r)
+
 	// Setup
 	fileSha1 := randHex(20)
 	expectedMeta := dao.FileMeta{
@@ -122,12 +221,12 @@ func TestGetFileMetaHandler(t *testing.T) {
 	}
 
 	// Request
-	// 注意：GetFileMetaHandler 使用 r.ParseForm() 解析参数，支持 URL query 参数
-	req := httptest.NewRequest("POST", "/file/meta?filehash="+fileSha1, nil)
+	req := httptest.NewRequest("GET", "/file/meta?filehash="+fileSha1, nil)
+	req.AddCookie(sessionCookie)
 	rr := httptest.NewRecorder()
 
 	// Execute
-	handler.GetFileMetaHandler(rr, req)
+	r.ServeHTTP(rr, req)
 
 	// Assert
 	if status := rr.Code; status != http.StatusOK {
@@ -150,6 +249,9 @@ func TestGetFileMetaHandler(t *testing.T) {
 
 func TestDownloadFileHandler(t *testing.T) {
 	requireDB(t)
+
+	r := newTestRouter()
+	sessionCookie := signupAndLogin(t, r)
 
 	// Setup
 	tmpDir := "./tmp_download"
@@ -177,11 +279,12 @@ func TestDownloadFileHandler(t *testing.T) {
 	}
 
 	// Request
-	req := httptest.NewRequest("POST", "/file/download?filehash="+fileSha1, nil)
+	req := httptest.NewRequest("GET", "/file/download?filehash="+fileSha1, nil)
+	req.AddCookie(sessionCookie)
 	rr := httptest.NewRecorder()
 
 	// Execute
-	handler.DownloadFileHandler(rr, req)
+	r.ServeHTTP(rr, req)
 
 	// Assert
 	if status := rr.Code; status != http.StatusOK {
@@ -207,6 +310,9 @@ func TestDownloadFileHandler(t *testing.T) {
 func TestFileMetaUpdateHandler(t *testing.T) {
 	requireDB(t)
 
+	r := newTestRouter()
+	sessionCookie := signupAndLogin(t, r)
+
 	// Setup
 	fileSha1 := randHex(20)
 	originalName := "orig_" + randHex(4) + ".txt"
@@ -226,10 +332,11 @@ func TestFileMetaUpdateHandler(t *testing.T) {
 	// op=0 表示重命名操作
 	url := "/file/update?op=0&filehash=" + fileSha1 + "&filename=" + newName
 	req := httptest.NewRequest("POST", url, nil)
+	req.AddCookie(sessionCookie)
 	rr := httptest.NewRecorder()
 
 	// Execute
-	handler.FileMetaUpdateHandler(rr, req)
+	r.ServeHTTP(rr, req)
 
 	// Assert
 	if status := rr.Code; status != http.StatusOK {
@@ -259,6 +366,9 @@ func TestFileMetaUpdateHandler(t *testing.T) {
 func TestFileDeleteHandler(t *testing.T) {
 	requireDB(t)
 
+	r := newTestRouter()
+	sessionCookie := signupAndLogin(t, r)
+
 	// Setup
 	tmpDir := "./tmp_delete"
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
@@ -286,10 +396,11 @@ func TestFileDeleteHandler(t *testing.T) {
 
 	// Request
 	req := httptest.NewRequest("POST", "/file/delete?filehash="+fileSha1, nil)
+	req.AddCookie(sessionCookie)
 	rr := httptest.NewRecorder()
 
 	// Execute
-	handler.FileDeleteHandler(rr, req)
+	r.ServeHTTP(rr, req)
 
 	// Assert
 	if status := rr.Code; status != http.StatusOK {
