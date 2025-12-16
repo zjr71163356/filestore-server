@@ -1,6 +1,7 @@
 package api
 
 import (
+	"filestore-server/pkg/mw"
 	"filestore-server/service"
 	"net/http"
 
@@ -8,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const sessionUserKey = "user"
 
 type authPayload struct {
 	Username string `json:"username" form:"username" binding:"required"`
@@ -45,7 +45,7 @@ func Login(c *gin.Context) {
 	}
 
 	session := sessions.Default(c)
-	session.Set(sessionUserKey, payload.Username)
+	session.Set(mw.SessionUserKey, payload.Username)
 	if err := session.Save(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save session"})
 		return
@@ -65,16 +65,3 @@ func Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "logout success"})
 }
 
-// AuthMiddleware 校验 session。
-func AuthMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		session := sessions.Default(c)
-		user := session.Get(sessionUserKey)
-		if user == nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			return
-		}
-		c.Set(sessionUserKey, user)
-		c.Next()
-	}
-}
