@@ -2,6 +2,7 @@ package router
 
 import (
 	"filestore-server/api"
+	"filestore-server/pkg/mw"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -26,13 +27,13 @@ func New() *gin.Engine {
 	r.POST("/user/logout", api.Logout)
 
 	auth := r.Group("/")
-	auth.Use(api.AuthMiddleware())
+	auth.Use(mw.AuthMiddleware())
 	auth.GET("/file/upload", api.UploadFile)
 	auth.POST("/file/upload", api.UploadFile)
-	auth.GET("/file/meta", api.GetFileMeta)
-	auth.GET("/file/download", api.DownloadFile)
-	auth.POST("/file/update", api.FileMetaUpdate)
-	auth.POST("/file/delete", api.FileDelete)
+	auth.GET("/file/meta", mw.RequireFileHash(), api.GetFileMeta)
+	auth.GET("/file/download", mw.RequireFileHash(), api.DownloadFile)
+	auth.POST("/file/update", mw.RequireFileHash(), mw.RequireOp("0"), mw.RequireFilename(), api.FileMetaUpdate)
+	auth.POST("/file/delete", mw.RequireFileHash(), api.FileDelete)
 
 	return r
 }

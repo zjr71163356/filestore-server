@@ -1,14 +1,11 @@
 package api
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"filestore-server/pkg/dao"
+	"filestore-server/pkg/mw"
 	"filestore-server/service"
-	"io"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -32,36 +29,8 @@ func UploadFile(c *gin.Context) {
 		}
 		defer file.Close()
 
-		if err := os.MkdirAll("./tmp", 0755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create tmp dir"})
-			return
-		}
-
-		location := "./tmp/" + header.Filename
-		dst, err := os.Create(location)
+		fmeta, err := service.UploadFile(c.Request.Context(), file, header.Filename)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create file"})
-			return
-		}
-		defer dst.Close()
-
-		hash := sha1.New()
-		filesize, err := io.Copy(io.MultiWriter(dst, hash), file)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file"})
-			return
-		}
-		fileSha1 := hex.EncodeToString(hash.Sum(nil))
-
-		fmeta := dao.FileMeta{
-			FileSha1: fileSha1,
-			FileName: header.Filename,
-			FileSize: filesize,
-			Location: location,
-			UploadAt: time.Now().Format("2006-01-02 15:04:05"),
-		}
-
-		if err := service.SaveFileMeta(c.Request.Context(), fmeta); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist file meta"})
 			return
 		}
@@ -74,13 +43,9 @@ func UploadFile(c *gin.Context) {
 
 // 获取文件元信息
 func GetFileMeta(c *gin.Context) {
-	fileSha1 := c.Query("filehash")
-	if fileSha1 == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing filehash parameter"})
-		return
-	}
+	fileSha1 := c.GetString(mw.CtxFileHashKey)
 
-	fmeta, err := service.GetFileMeta(c.Request.Context(), fileSha1)
+	fmeta, err := dao.GetFileMeta(c.Request.Context(), fileSha1)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "meta not found"})
 		return
@@ -91,27 +56,14 @@ func GetFileMeta(c *gin.Context) {
 
 // DownloadFile 下载文件
 func DownloadFile(c *gin.Context) {
-	filesha1 := c.Query("filehash")
-	if filesha1 == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing filehash parameter"})
-		return
-	}
+	filesha1 := c.GetString(mw.CtxFileHashKey)
 
-	fmeta, err := service.GetFileMeta(c.Request.Context(), filesha1)
+	fmeta, data, err := service.DownloadFile(c.Request.Context(), filesha1)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "meta not found"})
-		return
-	}
-
-	file, err := os.Open(fmeta.Location)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open file"})
-		return
-	}
-	defer file.Close()
-
-	data, err := io.ReadAll(file)
-	if err != nil {
+		if err.Error() == "file not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "meta not found"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
 		return
 	}
@@ -123,31 +75,15 @@ func DownloadFile(c *gin.Context) {
 
 // FileMetaUpdate 更新元信息接口(重命名)
 func FileMetaUpdate(c *gin.Context) {
-	filesha1 := c.PostForm("filehash")
-	if filesha1 == "" {
-		filesha1 = c.Query("filehash")
-	}
-	newFileName := c.PostForm("filename")
-	if newFileName == "" {
-		newFileName = c.Query("filename")
-	}
-	opType := c.PostForm("op")
-	if opType == "" {
-		opType = c.Query("op")
-	}
-	if opType != "0" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "invalid operation type"})
-		return
-	}
+	filesha1 := c.GetString(mw.CtxFileHashKey)
+	newFileName := c.GetString(mw.CtxFilenameKey)
 
-	curFileMeta, err := service.GetFileMeta(c.Request.Context(), filesha1)
+	curFileMeta, err := service.RenameFile(c.Request.Context(), filesha1, newFileName)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "meta not found"})
-		return
-	}
-	curFileMeta.FileName = newFileName
-
-	if err := service.UpdateFileMeta(c.Request.Context(), curFileMeta); err != nil {
+		if err.Error() == "file not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "meta not found"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update file meta"})
 		return
 	}
@@ -157,27 +93,13 @@ func FileMetaUpdate(c *gin.Context) {
 
 // FileDelete 删除文件元信息
 func FileDelete(c *gin.Context) {
-	filesha1 := c.PostForm("filehash")
-	if filesha1 == "" {
-		filesha1 = c.Query("filehash")
-	}
-	if filesha1 == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing filehash parameter"})
-		return
-	}
+	filesha1 := c.GetString(mw.CtxFileHashKey)
 
-	fmeta, err := service.GetFileMeta(c.Request.Context(), filesha1)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "meta not found"})
-		return
-	}
-
-	if err := service.DeleteFileMeta(c.Request.Context(), filesha1); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete meta"})
-		return
-	}
-
-	if err := os.Remove(fmeta.Location); err != nil {
+	if err := service.DeleteFile(c.Request.Context(), filesha1); err != nil {
+		if err.Error() == "file not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "meta not found"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove file"})
 		return
 	}
