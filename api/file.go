@@ -24,7 +24,7 @@ func UploadFile(c *gin.Context) {
 	case http.MethodPost:
 		file, header, err := c.Request.FormFile("file")
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to get file from form"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get file from form"})
 			return
 		}
 		defer file.Close()
