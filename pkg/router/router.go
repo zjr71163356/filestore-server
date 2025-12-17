@@ -29,7 +29,7 @@ func New() *gin.Engine {
 	auth := r.Group("/")
 	auth.Use(mw.AuthMiddleware())
 	auth.GET("/file/upload", api.UploadFile)
-	auth.POST("/file/upload", api.UploadFile)
+	auth.POST("/file/upload", mw.RequireUploadFile("file"), api.UploadFile)
 	auth.GET("/file/meta", mw.RequireFileHash(), api.GetFileMeta)
 	auth.GET("/file/download", mw.RequireFileHash(), api.DownloadFile)
 	auth.POST("/file/update", mw.RequireFileHash(), mw.RequireOp("0"), mw.RequireFilename(), api.FileMetaUpdate)

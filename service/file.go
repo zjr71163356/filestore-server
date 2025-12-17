@@ -14,9 +14,6 @@ import (
 
 // UploadFile 编排上传用例：落盘 + 写入元信息；DB 失败会回滚文件。
 func UploadFile(ctx context.Context, src io.Reader, filename string) (dao.FileMeta, error) {
-	if filename == "" {
-		return dao.FileMeta{}, fmt.Errorf("filename is required")
-	}
 	if err := os.MkdirAll("./tmp", 0o755); err != nil {
 		return dao.FileMeta{}, fmt.Errorf("failed to create tmp dir: %w", err)
 	}
@@ -60,10 +57,6 @@ func UploadFile(ctx context.Context, src io.Reader, filename string) (dao.FileMe
 
 // DownloadFile 编排下载用例：查询元信息 + 读取文件内容。
 func DownloadFile(ctx context.Context, filehash string) (dao.FileMeta, []byte, error) {
-	if filehash == "" {
-		return dao.FileMeta{}, nil, fmt.Errorf("filehash is required")
-	}
-
 	fmeta, err := dao.GetFileMeta(ctx, filehash)
 	if err != nil {
 		return dao.FileMeta{}, nil, err
@@ -79,13 +72,6 @@ func DownloadFile(ctx context.Context, filehash string) (dao.FileMeta, []byte, e
 
 // RenameFile 编排重命名用例：读取元信息 + 更新文件名。
 func RenameFile(ctx context.Context, filehash, newFilename string) (dao.FileMeta, error) {
-	if filehash == "" {
-		return dao.FileMeta{}, fmt.Errorf("filehash is required")
-	}
-	if newFilename == "" {
-		return dao.FileMeta{}, fmt.Errorf("filename is required")
-	}
-
 	fmeta, err := dao.GetFileMeta(ctx, filehash)
 	if err != nil {
 		return dao.FileMeta{}, err
@@ -100,10 +86,6 @@ func RenameFile(ctx context.Context, filehash, newFilename string) (dao.FileMeta
 
 // DeleteFile 编排删除用例：先移走文件再删除元信息，失败可回滚。
 func DeleteFile(ctx context.Context, filehash string) error {
-	if filehash == "" {
-		return fmt.Errorf("filehash is required")
-	}
-
 	fmeta, err := dao.GetFileMeta(ctx, filehash)
 	if err != nil {
 		return err
@@ -130,4 +112,8 @@ func DeleteFile(ctx context.Context, filehash string) error {
 	}
 
 	return nil
+}
+
+func UpdateUserFileMeta(ctx context.Context, username string, fmeta dao.FileMeta) {
+	dao.UpdateUserFileMeta(ctx, username, fmeta)
 }
