@@ -1,4 +1,4 @@
-package handler_test
+package test
 
 import (
 	"bytes"
@@ -10,7 +10,6 @@ import (
 	"filestore-server/pkg/dao"
 	"filestore-server/pkg/db"
 	"filestore-server/pkg/router"
-	"filestore-server/service"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -181,7 +180,7 @@ func TestUploadFileHandler_UpdateMeta(t *testing.T) {
 	}
 
 	// 检查 meta 中是否存在对应条目（GetFileMeta 返回零值时表示未找到）
-	gotMeta, err := service.GetFileMeta(context.Background(), expectedSha1)
+	gotMeta, err := dao.GetFileMeta(context.Background(), expectedSha1)
 	if err != nil {
 		t.Fatalf("meta not found for sha1 %s", expectedSha1)
 	}
@@ -216,7 +215,7 @@ func TestGetFileMetaHandler(t *testing.T) {
 		Location: "/tmp/" + randHex(6),
 		UploadAt: "2023-01-01 10:00:00",
 	}
-	if err := service.SaveFileMeta(context.Background(), expectedMeta); err != nil {
+	if err := dao.SaveFileMeta(context.Background(), expectedMeta.FileSha1, expectedMeta.FileName, expectedMeta.FileSize, expectedMeta.Location); err != nil {
 		t.Fatalf("failed to seed meta: %v", err)
 	}
 
@@ -274,7 +273,7 @@ func TestDownloadFileHandler(t *testing.T) {
 		FileSize: int64(len(content)),
 		Location: filePath,
 	}
-	if err := service.SaveFileMeta(context.Background(), fmeta); err != nil {
+	if err := dao.SaveFileMeta(context.Background(), fmeta.FileSha1, fmeta.FileName, fmeta.FileSize, fmeta.Location); err != nil {
 		t.Fatalf("failed to seed meta: %v", err)
 	}
 
@@ -324,7 +323,7 @@ func TestFileMetaUpdateHandler(t *testing.T) {
 		FileSize: 100,
 		Location: "/tmp/" + randHex(6),
 	}
-	if err := service.SaveFileMeta(context.Background(), fmeta); err != nil {
+	if err := dao.SaveFileMeta(context.Background(), fmeta.FileSha1, fmeta.FileName, fmeta.FileSize, fmeta.Location); err != nil {
 		t.Fatalf("failed to seed meta: %v", err)
 	}
 
@@ -354,7 +353,7 @@ func TestFileMetaUpdateHandler(t *testing.T) {
 	}
 
 	// Verify internal state
-	storedMeta, err := service.GetFileMeta(context.Background(), fileSha1)
+	storedMeta, err := dao.GetFileMeta(context.Background(), fileSha1)
 	if err != nil {
 		t.Fatalf("meta not found after update")
 	}
@@ -390,7 +389,7 @@ func TestFileDeleteHandler(t *testing.T) {
 		FileSize: int64(len(content)),
 		Location: filePath,
 	}
-	if err := service.SaveFileMeta(context.Background(), fmeta); err != nil {
+	if err := dao.SaveFileMeta(context.Background(), fmeta.FileSha1, fmeta.FileName, fmeta.FileSize, fmeta.Location); err != nil {
 		t.Fatalf("failed to seed meta: %v", err)
 	}
 
@@ -414,7 +413,7 @@ func TestFileDeleteHandler(t *testing.T) {
 	}
 
 	// Verify meta is deleted
-	if _, err := service.GetFileMeta(context.Background(), fileSha1); err == nil {
+	if _, err := dao.GetFileMeta(context.Background(), fileSha1); err == nil {
 		t.Errorf("meta was not deleted from memory")
 	}
 }
