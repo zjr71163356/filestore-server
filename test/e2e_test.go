@@ -12,9 +12,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -25,45 +23,6 @@ func startTestServer() *httptest.Server {
 	gin.SetMode(gin.TestMode)
 	r := router.New()
 	return httptest.NewServer(r)
-}
-
-func signupAndLoginClient(t *testing.T, baseURL string, client *http.Client) *http.Cookie {
-	t.Helper()
-	username := "user_" + randHex(6)
-	password := "pass_" + randHex(6)
-	form := url.Values{
-		"username": {username},
-		"password": {password},
-	}
-
-	signupReq, _ := http.NewRequest("POST", baseURL+"/user/signup", strings.NewReader(form.Encode()))
-	signupReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	signupResp, err := client.Do(signupReq)
-	if err != nil {
-		t.Fatalf("signup request failed: %v", err)
-	}
-	signupResp.Body.Close()
-	if signupResp.StatusCode != http.StatusOK && signupResp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("signup failed status: %d", signupResp.StatusCode)
-	}
-
-	loginReq, _ := http.NewRequest("POST", baseURL+"/user/login", strings.NewReader(form.Encode()))
-	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	loginResp, err := client.Do(loginReq)
-	if err != nil {
-		t.Fatalf("login request failed: %v", err)
-	}
-	defer loginResp.Body.Close()
-	if loginResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(loginResp.Body)
-		t.Fatalf("login failed status: %d body:%s", loginResp.StatusCode, string(body))
-	}
-
-	cookies := loginResp.Cookies()
-	if len(cookies) == 0 {
-		t.Fatalf("no session cookie returned")
-	}
-	return cookies[0]
 }
 
 func TestE2E_UploadDownload(t *testing.T) {
@@ -82,7 +41,7 @@ func TestE2E_UploadDownload(t *testing.T) {
 
 	baseURL := server.URL
 	client := server.Client()
-	sessionCookie := signupAndLoginClient(t, baseURL, client)
+	sessionCookie, username := signupAndLoginClient(t, baseURL, client)
 
 	// 2. 准备测试数据
 	content := make([]byte, 64)
@@ -148,6 +107,8 @@ func TestE2E_UploadDownload(t *testing.T) {
 	if metaData.FileName != filename {
 		t.Errorf("meta filename mismatch: got %s want %s", metaData.FileName, filename)
 	}
+
+	assertUserFileMeta(t, username, expectedSha1, filename, int64(len(content)))
 
 	// 5. Step 3: 更新文件元信息（重命名）
 	t.Log("Step 3: Renaming file meta...")
