@@ -137,14 +137,14 @@ func RestoreFileMeta(ctx context.Context, fileHash string) error {
 	return nil
 }
 
-func UpdateUserFileMeta(ctx context.Context, username string, fmeta FileMeta) error {
+func InsertUserFileMeta(ctx context.Context, username, fileSha1 string, fileSize int64, fileName string) error {
 	const sqlStr = "insert ignore into tbl_user_file (`user_name`,`file_sha1`,`file_size`,`file_name`,`status`) values (?,?,?,?,0)"
 	conn := db.DBconn()
 	if conn == nil {
 		return fmt.Errorf("db connection is nil")
 	}
 
-	result, err := conn.ExecContext(ctx, sqlStr, username, fmeta.FileSha1, fmeta.FileSize, fmeta.FileName)
+	result, err := conn.ExecContext(ctx, sqlStr, username, fileSha1, fileSize, fileName)
 
 	if err != nil {
 		return fmt.Errorf("failed to update user file meta: %w", err)
@@ -156,8 +156,71 @@ func UpdateUserFileMeta(ctx context.Context, username string, fmeta FileMeta) er
 		return fmt.Errorf("failed to get affected rows: %w", err)
 	}
 	if rows <= 0 {
-		return fmt.Errorf("file with hash %s uploaded before", fmeta.FileSha1)
+		return nil
 	}
 
 	return nil
+}
+
+func GetUserFilelist(ctx context.Context, username string, limit, offset int) ([]FileMeta, int, error) {
+	conn := db.DBconn()
+	if conn == nil {
+		return nil, 0, fmt.Errorf("db connection is nil")
+	}
+
+	const countSQL = "select count(*) from tbl_user_file where user_name=? and status=0"
+	var total int
+	if err := conn.QueryRowContext(ctx, countSQL, username).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count user files: %w", err)
+	}
+
+	const sqlStr = "select file_sha1,file_name,file_size,last_update from tbl_user_file where user_name=? and status=0 order by last_update desc, id desc limit ? offset ?"
+	rows, err := conn.QueryContext(ctx, sqlStr, username, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query user file list: %w", err)
+	}
+	defer rows.Close()
+
+	var fileMetaList []FileMeta
+	for rows.Next() {
+
+		var f FileMeta
+		var lastUpdate sql.NullTime
+		err := rows.Scan(&f.FileSha1, &f.FileName, &f.FileSize, &lastUpdate)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan row: %w", err)
+		}
+		if lastUpdate.Valid {
+			f.UploadAt = lastUpdate.Time.Format("2006-01-02 15:04:05")
+		}
+		fileMetaList = append(fileMetaList, f)
+
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("rows iteration error: %w", err)
+	}
+
+	return fileMetaList, total, nil
+}
+
+func GetFileExist(ctx context.Context, filehash string) (FileMeta, bool, error) {
+	conn := db.DBconn()
+	if conn == nil {
+		return FileMeta{}, false, fmt.Errorf("db connection is nil")
+	}
+
+	// SQL 关键字不区分大小写，但表名 tbl_file 在 Linux 下通常区分
+	const sqlStr = "select file_sha1,file_name,file_size,file_addr from tbl_file where file_sha1=? and status=0 limit 1"
+
+	var fmeta FileMeta
+	err := conn.QueryRowContext(ctx, sqlStr, filehash).Scan(&fmeta.FileSha1, &fmeta.FileName, &fmeta.FileSize, &fmeta.Location)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return FileMeta{}, false, nil
+		}
+		return FileMeta{}, false, fmt.Errorf("failed to query file meta: %w", err)
+	}
+
+	return fmeta, true, nil
 }

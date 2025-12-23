@@ -3,10 +3,13 @@ package api
 import (
 	"filestore-server/pkg/dao"
 	"filestore-server/pkg/mw"
+	util "filestore-server/pkg/utils"
 	"filestore-server/service"
 	"net/http"
 	"os"
+	"strconv"
 
+	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
 
@@ -29,12 +32,33 @@ func UploadFile(c *gin.Context) {
 		}
 		defer file.Close()
 
-		fmeta, err := service.UploadFile(c.Request.Context(), file, header.Filename)
+		session := sessions.Default(c)
+		userVal := session.Get(mw.SessionUserKey)
+		username, ok := userVal.(string)
+		if !ok || username == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
+			return
+		}
+		sha1 := util.FileSha1ReadSeeker(file)
+		fmeta, exists, err := service.GetFileExist(c.Request.Context(), sha1)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist file meta"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get file meta"})
 			return
 		}
 
+		if !exists {
+			fmeta, err = service.UploadFile(c.Request.Context(), file, header.Filename)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist file meta"})
+				return
+			}
+		}
+		fmeta.FileName = header.Filename
+
+		if err := service.InsertUserFileMeta(c.Request.Context(), username, fmeta.FileSha1, fmeta.FileSize, fmeta.FileName); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user file meta"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"message": "upload file success", "file": fmeta})
 	default:
 		c.Status(http.StatusMethodNotAllowed)
@@ -105,4 +129,56 @@ func FileDelete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "delete success"})
+}
+
+func UserFilelistQuery(c *gin.Context) {
+	username := c.GetString(mw.CtxUsernameKey)
+
+	limit := 0
+	if limitStr := c.PostForm("limit"); limitStr != "" {
+		val, err := strconv.Atoi(limitStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		limit = val
+	} else if limitStr := c.Query("limit"); limitStr != "" {
+		val, err := strconv.Atoi(limitStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		limit = val
+	}
+
+	offset := 0
+	if offsetStr := c.PostForm("offset"); offsetStr != "" {
+		val, err := strconv.Atoi(offsetStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+			return
+		}
+		offset = val
+	} else if offsetStr := c.Query("offset"); offsetStr != "" {
+		val, err := strconv.Atoi(offsetStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+			return
+		}
+		offset = val
+	}
+
+	files, total, err := service.GetUserFilelist(c.Request.Context(), username, service.ListOptions{
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user file list"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"total": total,
+		"files": files,
+	})
 }

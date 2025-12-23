@@ -13,8 +13,13 @@ const (
 	CtxFileHashKey = "filehash"
 	CtxFilenameKey = "filename"
 	CtxOpKey       = "op"
+	CtxUsernameKey = "user_name"
 )
 
+// paramFromQueryOrPost 从 gin.Context 中按优先级获取给定键的参数值。
+// 优先从 POST 表单（c.PostForm(key)）读取；如果该值非空则返回之。
+// 否则退回到 URL 查询参数（c.Query(key)）并返回其值。
+// 如果两者都不存在或均为空，则返回空字符串。
 func paramFromQueryOrPost(c *gin.Context, key string) string {
 	if v := c.PostForm(key); v != "" {
 		return v
@@ -100,6 +105,18 @@ func RequireUploadFile(fieldName string) gin.HandlerFunc {
 		}
 
 		c.Set(CtxFilenameKey, safe)
+		c.Next()
+	}
+}
+
+func RequireUsername() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		username := strings.TrimSpace(paramFromQueryOrPost(c, "user_name"))
+		if username == "" {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "missing username parameter"})
+			return
+		}
+		c.Set(CtxUsernameKey, username)
 		c.Next()
 	}
 }

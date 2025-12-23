@@ -31,6 +31,20 @@ func Sha1(data []byte) string {
 	return hex.EncodeToString(_sha1.Sum([]byte("")))
 }
 
+
+
+// FileSha1 计算文件 SHA1
+// 参数类型改为 io.ReadSeeker，这样可以使用 Seek 方法
+func FileSha1ReadSeeker(file io.ReadSeeker) string {
+    _sha1 := sha1.New()
+    io.Copy(_sha1, file)
+    
+    // 计算完后，自动将文件指针重置到开头
+    // 这样调用者后续可以直接读取文件，不用担心指针位置问题
+    file.Seek(0, 0)
+    
+    return hex.EncodeToString(_sha1.Sum(nil))
+}
 func FileSha1(file *os.File) string {
 	_sha1 := sha1.New()
 	io.Copy(_sha1, file)

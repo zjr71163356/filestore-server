@@ -2,11 +2,13 @@ package test
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"filestore-server/pkg/dao"
+	"filestore-server/pkg/db"
 	"filestore-server/pkg/router"
 	"io"
 	"mime/multipart"
@@ -14,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,6 +26,41 @@ func startTestServer() *httptest.Server {
 	gin.SetMode(gin.TestMode)
 	r := router.New()
 	return httptest.NewServer(r)
+}
+
+func uploadFile(t *testing.T, client *http.Client, baseURL string, sessionCookie *http.Cookie, filename string, content []byte) (string, int64) {
+	t.Helper()
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	part, err := w.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create form file failed: %v", err)
+	}
+	if _, err := part.Write(content); err != nil {
+		t.Fatalf("write content failed: %v", err)
+	}
+	w.Close()
+
+	req, _ := http.NewRequest("POST", baseURL+"/file/upload", &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(sessionCookie)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("upload request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload failed status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	h := sha1.New()
+	if _, err := h.Write(content); err != nil {
+		t.Fatalf("hash content failed: %v", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), int64(len(content))
 }
 
 func TestE2E_UploadDownload(t *testing.T) {
@@ -190,4 +228,118 @@ func TestE2E_UploadDownload(t *testing.T) {
 	}
 
 	t.Log("E2E Test Passed!")
+}
+
+func TestE2E_UserFilelistPagination(t *testing.T) {
+	requireDB(t)
+
+	tmpDir := "./tmp"
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		t.Fatalf("failed to create tmp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	server := startTestServer()
+	defer server.Close()
+
+	baseURL := server.URL
+	client := server.Client()
+	sessionCookie, username := signupAndLoginClient(t, baseURL, client)
+
+	seed := []struct {
+		FileName   string
+		Content    []byte
+		LastUpdate string
+	}{
+		{
+			FileName:   "e2e_list_old_" + randHex(4) + ".txt",
+			Content:    []byte("old_" + randHex(8)),
+			LastUpdate: "2023-01-01 10:00:00",
+		},
+		{
+			FileName:   "e2e_list_mid_" + randHex(4) + ".txt",
+			Content:    []byte("mid_" + randHex(8)),
+			LastUpdate: "2023-01-02 10:00:00",
+		},
+		{
+			FileName:   "e2e_list_new_" + randHex(4) + ".txt",
+			Content:    []byte("new_" + randHex(8)),
+			LastUpdate: "2023-01-03 10:00:00",
+		},
+	}
+
+	type uploaded struct {
+		FileSha1   string
+		LastUpdate string
+	}
+	var uploadedFiles []uploaded
+
+	for _, item := range seed {
+		fileSha1, _ := uploadFile(t, client, baseURL, sessionCookie, item.FileName, item.Content)
+		uploadedFiles = append(uploadedFiles, uploaded{
+			FileSha1:   fileSha1,
+			LastUpdate: item.LastUpdate,
+		})
+	}
+
+	conn := db.DBconn()
+	if conn == nil {
+		t.Fatalf("db connection is nil")
+	}
+
+	ctx := context.Background()
+	for _, item := range uploadedFiles {
+		_, err := conn.ExecContext(ctx,
+			"update tbl_user_file set last_update=? where user_name=? and file_sha1=?",
+			item.LastUpdate, username, item.FileSha1)
+		if err != nil {
+			t.Fatalf("failed to update last_update: %v", err)
+		}
+	}
+
+	req, _ := http.NewRequest("POST", baseURL+"/user/filelist?user_name="+username+"&limit=2&offset=1", nil)
+	req.AddCookie(sessionCookie)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("filelist request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("filelist failed status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var body struct {
+		Total int            `json:"total"`
+		Files []dao.FileMeta `json:"files"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response failed: %v", err)
+	}
+
+	if body.Total != len(seed) {
+		t.Fatalf("total mismatch: got %d want %d", body.Total, len(seed))
+	}
+	if len(body.Files) != 2 {
+		t.Fatalf("files length mismatch: got %d want %d", len(body.Files), 2)
+	}
+
+	if body.Files[0].FileSha1 != uploadedFiles[1].FileSha1 {
+		t.Errorf("first file sha mismatch: got %s want %s", body.Files[0].FileSha1, uploadedFiles[1].FileSha1)
+	}
+	if body.Files[1].FileSha1 != uploadedFiles[0].FileSha1 {
+		t.Errorf("second file sha mismatch: got %s want %s", body.Files[1].FileSha1, uploadedFiles[0].FileSha1)
+	}
+	if body.Files[0].UploadAt != uploadedFiles[1].LastUpdate {
+		t.Errorf("first file last_update mismatch: got %s want %s", body.Files[0].UploadAt, uploadedFiles[1].LastUpdate)
+	}
+	if body.Files[1].UploadAt != uploadedFiles[0].LastUpdate {
+		t.Errorf("second file last_update mismatch: got %s want %s", body.Files[1].UploadAt, uploadedFiles[0].LastUpdate)
+	}
+
+	if _, err := time.Parse("2006-01-02 15:04:05", body.Files[0].UploadAt); err != nil {
+		t.Errorf("invalid upload_at format: %v", err)
+	}
 }

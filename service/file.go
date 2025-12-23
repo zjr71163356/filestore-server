@@ -12,6 +12,17 @@ import (
 	"time"
 )
 
+const (
+	defaultListLimit = 10
+	maxListLimit     = 100
+)
+
+// ListOptions 定义列表查询的选项。
+type ListOptions struct {
+	Limit  int
+	Offset int
+}
+
 // UploadFile 编排上传用例：落盘 + 写入元信息；DB 失败会回滚文件。
 func UploadFile(ctx context.Context, src io.Reader, filename string) (dao.FileMeta, error) {
 	if err := os.MkdirAll("./tmp", 0o755); err != nil {
@@ -114,6 +125,36 @@ func DeleteFile(ctx context.Context, filehash string) error {
 	return nil
 }
 
-func UpdateUserFileMeta(ctx context.Context, username string, fmeta dao.FileMeta) {
-	dao.UpdateUserFileMeta(ctx, username, fmeta)
+func InsertUserFileMeta(ctx context.Context, username, fileSha1 string, fileSize int64, fileName string) error {
+	if err := dao.InsertUserFileMeta(ctx, username, fileSha1, fileSize, fileName); err != nil {
+		return fmt.Errorf("failed to update user file meta: %w", err)
+	}
+	return nil
+}
+
+// GetUserFilelist 获取用户文件列表，支持分页并返回总数。
+func GetUserFilelist(ctx context.Context, username string, opts ListOptions) ([]dao.FileMeta, int, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = defaultListLimit
+	}
+	if opts.Limit > maxListLimit {
+		opts.Limit = maxListLimit
+	}
+	if opts.Offset < 0 {
+		opts.Offset = 0
+	}
+
+	fileMetaList, total, err := dao.GetUserFilelist(ctx, username, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get user file list: %w", err)
+	}
+	return fileMetaList, total, nil
+}
+
+func GetFileExist(ctx context.Context, filehash string) (dao.FileMeta, bool, error) {
+	result, exists, err := dao.GetFileExist(ctx, filehash)
+	if err != nil {
+		return dao.FileMeta{}, false, err
+	}
+	return result, exists, nil
 }
