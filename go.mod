@@ -6,6 +6,7 @@ require (
 	github.com/gin-contrib/sessions v1.0.4
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-sql-driver/mysql v1.9.3
+	github.com/gomodule/redigo v1.9.2
 	golang.org/x/crypto v0.46.0
 )
 
