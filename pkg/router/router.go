@@ -34,6 +34,8 @@ func New() *gin.Engine {
 	auth.GET("/file/download", mw.RequireFileHash(), api.DownloadFile)
 	auth.POST("/file/update", mw.RequireFileHash(), mw.RequireOp("0"), mw.RequireFilename(), api.FileMetaUpdate)
 	auth.POST("/file/delete", mw.RequireFileHash(), api.FileDelete)
-	auth.POST("/user/filelist",mw.RequireUsername(),api.UserFilelistQuery)
+	auth.POST("/user/filelist", mw.RequireUsername(), api.UserFilelistQuery)
+	auth.POST("/mpfile/init", mw.RequireUploadInitMutipart(), api.UploadInitMutipart)
+	auth.POST("/mpfile/complete", mw.RequireUploadComplete(), api.CompleteUploadHandler)
 	return r
 }
