@@ -137,7 +137,7 @@ func RestoreFileMeta(ctx context.Context, fileHash string) error {
 	return nil
 }
 
-func InsertUserFileMeta(ctx context.Context, username, fileSha1 string, fileSize int64, fileName string) error {
+func SaveUserFileMeta(ctx context.Context, username, fileSha1 string, fileSize int64, fileName string) error {
 	const sqlStr = "insert ignore into tbl_user_file (`user_name`,`file_sha1`,`file_size`,`file_name`,`status`) values (?,?,?,?,0)"
 	conn := db.DBconn()
 	if conn == nil {
