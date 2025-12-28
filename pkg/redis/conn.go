@@ -1,4 +1,4 @@
-package redis
+package redispool
 
 import (
 	"fmt"
@@ -62,3 +62,4 @@ func init() {
 func GetRedisConnectionPool() *redis.Pool {
 	return pool
 }
+
