@@ -130,7 +130,7 @@ func CompleteUploadHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file meta"})
 		return
 	}
-	if err := service.InsertUserFileMeta(c.Request.Context(), username, info.FileHash, info.FileSize, filename); err != nil {
+	if err := service.SaveUserFileMeta(c.Request.Context(), username, info.FileHash, info.FileSize, filename); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save user file meta"})
 		return
 	}

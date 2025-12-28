@@ -55,7 +55,7 @@ func UploadFile(c *gin.Context) {
 		}
 		fmeta.FileName = header.Filename
 
-		if err := service.InsertUserFileMeta(c.Request.Context(), username, fmeta.FileSha1, fmeta.FileSize, fmeta.FileName); err != nil {
+		if err := service.SaveUserFileMeta(c.Request.Context(), username, fmeta.FileSha1, fmeta.FileSize, fmeta.FileName); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user file meta"})
 			return
 		}

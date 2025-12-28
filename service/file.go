@@ -125,7 +125,7 @@ func DeleteFile(ctx context.Context, filehash string) error {
 	return nil
 }
 
-func InsertUserFileMeta(ctx context.Context, username, fileSha1 string, fileSize int64, fileName string) error {
+func SaveUserFileMeta(ctx context.Context, username, fileSha1 string, fileSize int64, fileName string) error {
 	if err := dao.SaveUserFileMeta(ctx, username, fileSha1, fileSize, fileName); err != nil {
 		return fmt.Errorf("failed to update user file meta: %w", err)
 	}
