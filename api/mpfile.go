@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,12 +19,16 @@ import (
 	"github.com/gomodule/redigo/redis"
 )
 
-func getChunkFilePath(uploadID string, chunkIndex int) string {
-	return "/data/" + uploadID + "/" + strconv.Itoa(chunkIndex)
+func getUploadRoot(uploadID string) string {
+	return filepath.Join("/data", uploadID)
 }
 
-func getFilePath(uploadID string) string {
-	return "/data/" + uploadID
+func getChunkFilePath(uploadID string, chunkIndex int) string {
+	return filepath.Join(getUploadRoot(uploadID), strconv.Itoa(chunkIndex))
+}
+
+func getMergedFilePath(uploadID, filename string) string {
+	return filepath.Join(getUploadRoot(uploadID), filepath.Base(filename))
 }
 
 func UploadInitMutipart(c *gin.Context) {
@@ -63,14 +68,20 @@ func UploadPartHandler(c *gin.Context) {
 	chunkIndex := c.GetInt(mw.CtxChunkIndexKey)
 
 	fpath := getChunkFilePath(uploadID, chunkIndex)
+	if err := os.MkdirAll(filepath.Dir(fpath), 0o755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create chunk dir"})
+		return
+	}
 
 	fd, err := os.Create(fpath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Create file path error"})
+		return
 	}
 	defer fd.Close()
 	if _, err := io.Copy(fd, c.Request.Body); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to copy data to path"})
+		return
 	}
 
 	conn := redispool.GetRedisConnectionPool().Get()
@@ -105,6 +116,11 @@ func CompleteUploadHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing filename parameter"})
 		return
 	}
+	safeFilename := filepath.Base(filename)
+	if safeFilename == "" || safeFilename == "." || safeFilename == ".." || safeFilename == string(filepath.Separator) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid filename parameter"})
+		return
+	}
 
 	conn := redispool.GetRedisConnectionPool().Get()
 	defer conn.Close()
@@ -137,27 +153,31 @@ func CompleteUploadHandler(c *gin.Context) {
 		return
 	}
 
-	location := getFilePath(info.UploadID)
+	location := getMergedFilePath(info.UploadID, safeFilename)
+	if err := os.MkdirAll(filepath.Dir(location), 0o755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create file dir"})
+		return
+	}
 
 	destFile, err := os.Create(location)
-
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create file"})
 		return
 	}
+	defer destFile.Close()
 
-	err = parallelMergeMutiPartFile(destFile, info.UploadID, info.ChunkCount, int64(info.ChunkSize))
+	err = parallelMergeMutiPartFile(destFile, info.UploadID, totalCount, int64(info.ChunkSize))
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to merge mutipart file"})
 		return
 	}
-	if err := dao.SaveFileMeta(c.Request.Context(), info.FileHash, filename, info.FileSize, location); err != nil {
+	if err := dao.SaveFileMeta(c.Request.Context(), info.FileHash, safeFilename, info.FileSize, location); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file meta"})
 		return
 	}
 
-	if err := service.SaveUserFileMeta(c.Request.Context(), username, info.FileHash, info.FileSize, filename); err != nil {
+	if err := service.SaveUserFileMeta(c.Request.Context(), username, info.FileHash, info.FileSize, safeFilename); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save user file meta"})
 		return
 	}
@@ -166,7 +186,7 @@ func CompleteUploadHandler(c *gin.Context) {
 		"data": gin.H{
 			"upload":   info,
 			"username": username,
-			"filename": filename,
+			"filename": safeFilename,
 		},
 	})
 }

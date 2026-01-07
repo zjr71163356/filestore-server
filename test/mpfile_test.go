@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"filestore-server/api"
 	"filestore-server/pkg/dao"
 	"filestore-server/pkg/mw"
 	"net/http"
@@ -108,7 +107,6 @@ func TestMultipartUploadPart_WritesChunkAndMarksRedis(t *testing.T) {
 	requireDB(t)
 
 	r := newTestRouter()
-	r.POST("/mpfile/upload", mw.AuthMiddleware(), mw.RequireUploadPart(), api.UploadPartHandler)
 	sessionCookie, _ := signupAndLogin(t, r)
 
 	uploadID := "ut_" + randHex(6)
@@ -205,6 +203,92 @@ func TestMultipartComplete_ReturnsBadRequestWhenIncomplete(t *testing.T) {
 	if exists {
 		t.Fatalf("file meta should not be saved when chunks missing")
 	}
+
+	conn := requireRedis(t)
+	uploadKey := "MP_" + info.UploadID
+	t.Cleanup(func() {
+		_, _ = conn.Do("DEL", uploadKey)
+		conn.Close()
+	})
+}
+
+func TestMultipartComplete_MergesChunksAndSavesMeta(t *testing.T) {
+	requireDB(t)
+
+	r := newTestRouter()
+	sessionCookie, username := signupAndLogin(t, r)
+
+	content := []byte("mp_full_" + randHex(24))
+	h := sha1.New()
+	if _, err := h.Write(content); err != nil {
+		t.Fatalf("hash content failed: %v", err)
+	}
+	filehash := hex.EncodeToString(h.Sum(nil))
+	filesize := int64(len(content))
+	chunkSize := 8
+	chunkCount := (len(content) + chunkSize - 1) / chunkSize
+	filename := "mp_full_" + randHex(4) + ".txt"
+
+	info := initMultipartUpload(t, r, sessionCookie, filehash, filesize, chunkCount, chunkSize)
+	chunkCount = info.ChunkCount
+	chunkSize = info.ChunkSize
+
+	uploadRoot := filepath.Join("/data", info.UploadID)
+	if err := os.MkdirAll(uploadRoot, 0o755); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			t.Skipf("no permission to create upload dir %s: %v", uploadRoot, err)
+		}
+		t.Fatalf("failed to create upload dir: %v", err)
+	}
+	defer os.RemoveAll(uploadRoot)
+
+	for idx := 0; idx < chunkCount; idx++ {
+		start := idx * chunkSize
+		end := start + chunkSize
+		if end > len(content) {
+			end = len(content)
+		}
+
+		req := httptest.NewRequest("POST", "/mpfile/upload?uploadid="+info.UploadID+"&index="+strconv.Itoa(idx+1), bytes.NewReader(content[start:end]))
+		req.AddCookie(sessionCookie)
+		rr := httptest.NewRecorder()
+
+		r.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("upload chunk %d failed: status=%d body=%s", idx+1, rr.Code, rr.Body.String())
+		}
+	}
+
+	form := url.Values{
+		"uploadid":   {info.UploadID},
+		"user_name":  {username},
+		"filehash":   {filehash},
+		"filesize":   {strconv.FormatInt(filesize, 10)},
+		"filename":   {filename},
+		"chunkcount": {strconv.Itoa(chunkCount)},
+		"chunksize":  {strconv.Itoa(chunkSize)},
+	}
+	req := httptest.NewRequest("POST", "/mpfile/complete", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(sessionCookie)
+	rr := httptest.NewRecorder()
+
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("complete upload failed: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	mergedPath := filepath.Join(uploadRoot, filename)
+	mergedData, err := os.ReadFile(mergedPath)
+	if err != nil {
+		t.Fatalf("failed to read merged file: %v", err)
+	}
+	if !bytes.Equal(mergedData, content) {
+		t.Errorf("merged content mismatch, got %q want %q", string(mergedData), string(content))
+	}
+
+	assertFileMeta(t, filehash, filename, filesize)
+	assertUserFileMeta(t, username, filehash, filename, filesize)
 
 	conn := requireRedis(t)
 	uploadKey := "MP_" + info.UploadID
