@@ -4,16 +4,25 @@ import (
 	"fmt"
 	"time"
 
+	"filestore-server/config"
+
 	"github.com/gomodule/redigo/redis"
 )
 
 var (
-	pool      *redis.Pool
-	redisHost = "127.0.0.1:6379"
-	redisPass = "testupload"
+	pool *redis.Pool
 )
 
 func newRedisPool() *redis.Pool {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("load config for redis: %v\n", err)
+		return nil
+	}
+
+	addr := cfg.Redis.Addr
+	password := cfg.Redis.Password
+
 	return &redis.Pool{
 		// Maximum number of idle connections in the pool.
 		MaxIdle: 50,
@@ -22,15 +31,17 @@ func newRedisPool() *redis.Pool {
 		MaxActive:   50,
 		IdleTimeout: 300 * time.Second,
 		Dial: func() (conn redis.Conn, err error) {
-			conn, err = redis.Dial("tcp", redisHost)
+			conn, err = redis.Dial("tcp", addr)
 			if err != nil {
 				return nil, err
 			}
 
-			if _, err = conn.Do("AUTH", redisPass); err != nil {
-				fmt.Println(err)
-				conn.Close()
-				return nil, err
+			if password != "" {
+				if _, err = conn.Do("AUTH", password); err != nil {
+					fmt.Println(err)
+					conn.Close()
+					return nil, err
+				}
 			}
 
 			return conn, nil
@@ -51,15 +62,22 @@ func newRedisPool() *redis.Pool {
 
 func init() {
 	pool = newRedisPool()
-	data, err := pool.Get().Do("KEYS", "*")
-	if err != nil {
-		fmt.Println("pool get keys error:%w", err)
+	if pool == nil {
+		return
 	}
-	fmt.Println(data)
+	conn := pool.Get()
+	if conn == nil {
+		fmt.Println("pool get connection is nil")
+		return
+	}
+	defer conn.Close()
+
+	if _, err := conn.Do("PING"); err != nil {
+		fmt.Printf("redis ping failed: %v\n", err)
+	}
 
 }
 
 func GetRedisConnectionPool() *redis.Pool {
 	return pool
 }
-

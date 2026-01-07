@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"filestore-server/config"
 	"filestore-server/pkg/dao"
 	"filestore-server/pkg/mw"
 	redispool "filestore-server/pkg/redis"
@@ -20,7 +21,12 @@ import (
 )
 
 func getUploadRoot(uploadID string) string {
-	return filepath.Join("/data", uploadID)
+	cfg := config.MustLoad()
+	tmpDir := cfg.Storage.TmpDir
+	if tmpDir == "" {
+		tmpDir = "./tmp"
+	}
+	return filepath.Join(tmpDir, uploadID)
 }
 
 func getChunkFilePath(uploadID string, chunkIndex int) string {

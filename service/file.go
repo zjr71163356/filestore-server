@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
+
+	"filestore-server/config"
 )
 
 const (
@@ -25,11 +28,17 @@ type ListOptions struct {
 
 // UploadFile 编排上传用例：落盘 + 写入元信息；DB 失败会回滚文件。
 func UploadFile(ctx context.Context, src io.Reader, filename string) (dao.FileMeta, error) {
-	if err := os.MkdirAll("./tmp", 0o755); err != nil {
+	cfg := config.MustLoad()
+	tmpDir := cfg.Storage.TmpDir
+	if tmpDir == "" {
+		tmpDir = "./tmp"
+	}
+
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return dao.FileMeta{}, fmt.Errorf("failed to create tmp dir: %w", err)
 	}
 
-	location := "./tmp/" + filename
+	location := filepath.Join(tmpDir, filename)
 	dst, err := os.Create(location)
 	if err != nil {
 		return dao.FileMeta{}, fmt.Errorf("failed to create file: %w", err)

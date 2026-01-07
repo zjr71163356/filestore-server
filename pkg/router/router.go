@@ -2,6 +2,7 @@ package router
 
 import (
 	"filestore-server/api"
+	"filestore-server/config"
 	"filestore-server/pkg/mw"
 
 	"github.com/gin-contrib/sessions"
@@ -10,17 +11,30 @@ import (
 )
 
 // New 构建 gin.Engine，注册路由与 session 中间件。
-func New() *gin.Engine {
+func New(cfg config.Config) *gin.Engine {
 	r := gin.Default()
 
-	store := cookie.NewStore([]byte("filestore-session-secret"))
+	secret := cfg.Session.Secret
+	if secret == "" {
+		secret = "filestore-session-secret"
+	}
+	sessionName := cfg.Session.Name
+	if sessionName == "" {
+		sessionName = "filestore_session"
+	}
+	maxAge := cfg.Session.MaxAge
+	if maxAge <= 0 {
+		maxAge = 86400 * 7
+	}
+
+	store := cookie.NewStore([]byte(secret))
 	store.Options(sessions.Options{
 		Path:     "/",
-		MaxAge:   86400 * 7,
+		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   cfg.Session.Secure,
 	})
-	r.Use(sessions.Sessions("filestore_session", store))
+	r.Use(sessions.Sessions(sessionName, store))
 
 	r.POST("/user/signup", api.Signup)
 	r.POST("/user/login", api.Login)
