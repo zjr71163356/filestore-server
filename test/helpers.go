@@ -13,9 +13,11 @@ import (
 
 	"filestore-server/pkg/dao"
 	"filestore-server/pkg/db"
+	redispool "filestore-server/pkg/redis"
 	"filestore-server/pkg/router"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gomodule/redigo/redis"
 )
 
 const (
@@ -73,6 +75,23 @@ func requireDB(t *testing.T) {
 		t.Error("db not available")
 	}
 	ensureTestTables(t)
+}
+
+func requireRedis(t *testing.T) redis.Conn {
+	t.Helper()
+	pool := redispool.GetRedisConnectionPool()
+	if pool == nil {
+		t.Fatalf("redis pool is nil")
+	}
+	conn := pool.Get()
+	if conn == nil {
+		t.Fatalf("redis connection is nil")
+	}
+	if _, err := conn.Do("PING"); err != nil {
+		conn.Close()
+		t.Fatalf("redis not available: %v", err)
+	}
+	return conn
 }
 
 // ensureTestTables creates tables for tests if they do not exist.
