@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"filestore-server/config"
 	"filestore-server/pkg/dao"
 	"filestore-server/pkg/mw"
 	"net/http"
@@ -21,6 +22,16 @@ import (
 	"github.com/gin-gonic/gin"
 	redigo "github.com/gomodule/redigo/redis"
 )
+
+func multipartBaseDir(t *testing.T) string {
+	t.Helper()
+	cfg := config.MustLoad()
+	tmpDir := cfg.Storage.TmpDir
+	if tmpDir == "" {
+		tmpDir = "./tmp"
+	}
+	return tmpDir
+}
 
 func initMultipartUpload(t *testing.T, r *gin.Engine, sessionCookie *http.Cookie, filehash string, filesize int64, chunkCount, chunkSize int) mw.MutiPartUploadInfo {
 	t.Helper()
@@ -110,7 +121,7 @@ func TestMultipartUploadPart_WritesChunkAndMarksRedis(t *testing.T) {
 	sessionCookie, _ := signupAndLogin(t, r)
 
 	uploadID := "ut_" + randHex(6)
-	chunkDir := filepath.Join("/data", uploadID)
+	chunkDir := filepath.Join(multipartBaseDir(t), uploadID)
 	if err := os.MkdirAll(chunkDir, 0o755); err != nil {
 		if errors.Is(err, os.ErrPermission) {
 			t.Skipf("no permission to create chunk dir %s: %v", chunkDir, err)
@@ -233,7 +244,7 @@ func TestMultipartComplete_MergesChunksAndSavesMeta(t *testing.T) {
 	chunkCount = info.ChunkCount
 	chunkSize = info.ChunkSize
 
-	uploadRoot := filepath.Join("/data", info.UploadID)
+	uploadRoot := filepath.Join(multipartBaseDir(t), info.UploadID)
 	if err := os.MkdirAll(uploadRoot, 0o755); err != nil {
 		if errors.Is(err, os.ErrPermission) {
 			t.Skipf("no permission to create upload dir %s: %v", uploadRoot, err)

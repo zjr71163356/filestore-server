@@ -7,6 +7,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"filestore-server/config"
 	"filestore-server/pkg/dao"
 	"filestore-server/pkg/db"
 	"filestore-server/pkg/router"
@@ -24,7 +25,7 @@ import (
 // 启动测试服务器
 func startTestServer() *httptest.Server {
 	gin.SetMode(gin.TestMode)
-	r := router.New()
+	r := router.New(config.MustLoad())
 	return httptest.NewServer(r)
 }
 

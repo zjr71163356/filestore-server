@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"filestore-server/config"
 	"filestore-server/pkg/dao"
 	"filestore-server/pkg/db"
 	redispool "filestore-server/pkg/redis"
@@ -123,7 +124,7 @@ func randHex(nBytes int) string {
 
 func newTestRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
-	return router.New()
+	return router.New(config.MustLoad())
 }
 
 func signupAndLogin(t *testing.T, r *gin.Engine) (*http.Cookie, string) {
